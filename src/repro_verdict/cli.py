@@ -352,6 +352,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_init(args)
         if args.command == "selfcheck":
             return cmd_selfcheck(args)
+    except OSError as exc:
+        print(f"cannot read input: {exc}", file=sys.stderr)
+        return 2
     except PlanError as exc:
         print(f"plan error: {exc}", file=sys.stderr)
         return 2

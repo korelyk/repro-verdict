@@ -97,9 +97,12 @@ def compare_claims(
 ) -> Verdict:
     """Join claims with observations by ``id`` and produce an aggregate verdict.
 
-    ``frozen_at`` activates the provenance gate: an observation that claims to
-    have been produced before the plan was frozen is refused, because it cannot
-    have been produced by this reproduction.
+    ``frozen_at`` activates the provenance gate. Two kinds of observation are
+    refused: one produced before the plan was frozen, and one that carries no
+    ``produced_at`` at all. The second case is not ignorance, it is the same
+    refusal -- an observation that cannot be shown to postdate the freeze may
+    well be a leftover, and a gate that opens when the evidence is deleted is
+    not a gate.
     """
 
     tol = tolerances or Tolerances()
@@ -120,20 +123,12 @@ def compare_claims(
             missing.append(claim.id)
             continue
 
-        if frozen_at is not None and obs.produced_at is not None and obs.produced_at < frozen_at:
-            comparisons.append(
-                Comparison(
-                    claim,
-                    obs.observed,
-                    None,
-                    None,
-                    Grade.F,
-                    "stale observation: produced "
-                    f"{obs.produced_at.isoformat()} before the plan was frozen at {frozen_at.isoformat()}",
-                )
-            )
-            stale.append(claim.id)
-            continue
+        if frozen_at is not None:
+            refusal = _provenance_refusal(obs, frozen_at)
+            if refusal is not None:
+                comparisons.append(Comparison(claim, obs.observed, None, None, Grade.F, refusal))
+                stale.append(claim.id)
+                continue
 
         grade, abs_err, rel_err, reason = grade_pair(claim.claimed, obs.observed, tol)
         if grade is Grade.F and obs.observed is None:
@@ -174,6 +169,28 @@ def compare_claims(
         score=coverage(outcomes) if outcomes else None,
         meta=dict(meta or {}),
     )
+
+
+def _provenance_refusal(observation: Observation, frozen_at: datetime) -> str | None:
+    """Return why the provenance gate refuses this observation, or ``None``.
+
+    ``frozen_at`` is a promise: only work done after the acceptance line was
+    frozen counts. An observation with no ``produced_at`` cannot be shown to
+    satisfy that promise, so it is refused as well. Waving it through would mean
+    the gate opens whenever the timestamp is deleted.
+    """
+
+    if observation.produced_at is None:
+        return (
+            "unprovenanced observation: no produced_at, so it cannot be shown to "
+            f"postdate the plan freeze at {frozen_at.isoformat()}"
+        )
+    if observation.produced_at < frozen_at:
+        return (
+            f"stale observation: produced {observation.produced_at.isoformat()} "
+            f"before the plan was frozen at {frozen_at.isoformat()}"
+        )
+    return None
 
 
 def _resolving_gap(claim_id: str, gaps: Sequence[Gap]) -> Gap | None:

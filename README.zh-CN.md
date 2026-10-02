@@ -154,6 +154,10 @@ Gate warnings — the numeric grade and the tree disagree
 给观测值写 `produced_at`，**早于冻结时刻的观测一律拒收**——
 上个月遗留的 JSON 不可能冒充这次的运行结果。
 
+门禁是 **fail-closed** 的：一旦写了 `frozen_at`，**缺 `produced_at` 的观测同样拒收**——
+它无法被证明晚于冻结时刻，而「删掉时间戳就能过」的门禁不算门禁。
+不写 `frozen_at`，就等于没有声明任何溯源要求。
+
 ## 会降档的结构化缺口
 
 缺口以前只是散文。现在它可以声明影响哪些 claim、以及用了什么兜底，

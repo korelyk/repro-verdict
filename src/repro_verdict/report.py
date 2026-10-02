@@ -231,7 +231,7 @@ def render_report(
         lines.extend(f"- `{item}`" for item in verdict.missing)
         lines.append("")
     if verdict.stale:
-        lines.append("**Refused as stale (produced before the plan was frozen)**")
+        lines.append("**Refused by the provenance gate (stale, or no `produced_at`)**")
         lines.extend(f"- `{item}`" for item in verdict.stale)
         lines.append("")
     if verdict.unclaimed:
@@ -291,7 +291,7 @@ def build_review_context(verdict: Verdict, plan: Plan | None = None) -> str:
     if verdict.missing:
         lines.append("Claims with no observation: " + ", ".join(verdict.missing))
     if verdict.stale:
-        lines.append("Refused as stale: " + ", ".join(verdict.stale))
+        lines.append("Refused by the provenance gate: " + ", ".join(verdict.stale))
     if verdict.unclaimed:
         lines.append("Observations with no claim: " + ", ".join(verdict.unclaimed))
     if verdict.gaps:

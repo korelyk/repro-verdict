@@ -216,6 +216,11 @@ contradiction is the honest move.
 in the plan and give observations a `produced_at`; anything older than the freeze
 is refused, so a leftover JSON from last month cannot pass as this run's result.
 
+The gate is **fail-closed**. Once `frozen_at` is set, an observation with no
+`produced_at` is refused as well: it cannot be shown to postdate the freeze, and
+a gate that opens when the timestamp is deleted is not a gate. Omit `frozen_at`
+and no provenance claim is made at all.
+
 ```json
 { "key": "rmse", "group": "A1", "observed": 284.40, "produced_at": "2026-10-01T12:04:00Z" }
 ```

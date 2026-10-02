@@ -142,10 +142,22 @@ def test_observation_produced_after_the_freeze_is_accepted():
     assert verdict.stale == []
 
 
-def test_freeze_gate_ignores_observations_without_a_timestamp():
+def test_freeze_gate_refuses_observations_without_a_timestamp():
+    """A time-stampless observation cannot be shown to postdate the freeze."""
+
     frozen = datetime(2026, 10, 1, tzinfo=timezone.utc)
     verdict = compare_claims([claim()], [obs()], frozen_at=frozen)
+
+    assert verdict.grade is Grade.F
+    assert verdict.stale == ["rmse@A1"]
+    assert "unprovenanced observation" in verdict.comparisons[0].reason
+
+
+def test_observations_without_a_timestamp_are_fine_when_nothing_is_frozen():
+    verdict = compare_claims([claim()], [obs()])
+
     assert verdict.grade is Grade.A
+    assert verdict.stale == []
 
 
 def test_resolved_gap_downgrades_a_failure_to_grade_c():
