@@ -64,7 +64,12 @@ class ReviewerSpec:
         lines.append('- "Confidence": a rating from 1 to 5 for how sure you are of this review')
         options = ", ".join(f'"{option}"' for option in self.decision_options)
         lines.append(f'- "{self.decision_label}": exactly one of {options}')
-        lines.append('- "Weaknesses": a list of concrete weaknesses of this reproduction')
+        lines.append(
+            '- "Findings": a list of objects, each with the fields "location", "severity" and '
+            '"issue". "location" must name the file, module, section or group the finding lives '
+            'in; "severity" must be exactly one of "high", "medium" or "low". A finding without '
+            "a location is not acceptable."
+        )
         lines.append('- "Questions": a list of things you could not verify from the material provided')
         return "\n".join(lines)
 
@@ -224,13 +229,18 @@ def score_review(spec: ReviewerSpec, payload: dict[str, Any]) -> float | None:
     return round(weighted_sum / total_weight * 10, 2)
 
 
+_CLIENT_ERROR = (
+    "the review panel needs the llm extra, install with: pip install 'repro-verdict[llm]'"
+)
+
+
 def _client(api_key: str | None = None, base_url: str | None = None):
+    """Build an OpenAI-compatible client, or ``None`` when the extra is missing."""
+
     try:
         from openai import OpenAI
-    except ImportError as exc:  # pragma: no cover - depends on environment
-        raise RuntimeError(
-            "the review panel needs the llm extra, install with: pip install 'repro-verdict[llm]'"
-        ) from exc
+    except ImportError:  # pragma: no cover - depends on environment
+        return None
 
     kwargs: dict[str, Any] = {}
     if api_key:
@@ -238,6 +248,46 @@ def _client(api_key: str | None = None, base_url: str | None = None):
     if base_url:
         kwargs["base_url"] = base_url
     return OpenAI(**kwargs)
+
+
+@dataclass
+class PanelSummary:
+    """Whether the panel produced anything usable.
+
+    A panel that half-failed must never look like a panel that agreed, so the
+    valid/total count is reported next to the scores.
+    """
+
+    total: int
+    valid: int
+    mean_score: float | None
+    failed: list[str] = field(default_factory=list)
+    decisions: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def complete(self) -> bool:
+        return self.total > 0 and self.valid == self.total
+
+    def describe(self) -> str:
+        return f"{self.valid}/{self.total} reviewers returned a parseable score"
+
+
+def summarise(reviews: Sequence[Review]) -> PanelSummary:
+    """Aggregate a panel run into validity counts and a mean score."""
+
+    scored = [review.score for review in reviews if review.score is not None]
+    decisions = {
+        review.reviewer: review.decision
+        for review in reviews
+        if review.decision and not review.error
+    }
+    return PanelSummary(
+        total=len(reviews),
+        valid=len(scored),
+        mean_score=round(sum(scored) / len(scored), 2) if scored else None,
+        failed=[review.reviewer for review in reviews if review.error or review.score is None],
+        decisions=decisions,
+    )
 
 
 def run_reviews(
@@ -260,8 +310,15 @@ def run_reviews(
     client = _client(api_key, base_url)
     results: list[Review] = []
     user_content = context if not extra_instructions else f"{context}\n\n---\n\n{extra_instructions}"
+    specs = list(specs or get_specs())
 
-    for spec in specs or get_specs():
+    if client is None:
+        return [
+            Review(reviewer=spec.key, title=spec.title, error=_CLIENT_ERROR)
+            for spec in specs
+        ]
+
+    for spec in specs:
         review = Review(reviewer=spec.key, title=spec.title)
         try:
             response = client.chat.completions.create(

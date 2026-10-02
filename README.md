@@ -47,6 +47,9 @@ Tolerances default to `A <= 0.1%` and `B <= 5%` and are declared in the plan, wh
 means **the acceptance bar is written down before the run**, not negotiated after
 seeing the result.
 
+The grade only answers *did the numbers land*. It is deliberately paired with a
+second number — see [Requirement coverage](#requirement-coverage).
+
 ## Install
 
 ```bash
@@ -77,6 +80,12 @@ export OPENAI_BASE_URL=http://127.0.0.1:8080/v1
 
 repro-verdict check --plan repro-plan.yaml --runs runs/ \
   --llm --model your-model-name --out REPRO_REPORT.md
+```
+
+Check whether the reviewer panel is even stable before trusting its verdicts:
+
+```bash
+repro-verdict selfcheck --plan repro-plan.yaml --runs runs/ --repeat 3 --temperature 0.7
 ```
 
 Exit code is `0` when the target grade is met, `1` when it is not, `2` on a broken
@@ -148,6 +157,87 @@ reports the Spearman rank correlation between claimed and observed values:
 A high per-metric agreement combined with a negative rho is exactly the situation
 where "the numbers look fine" hides a broken conclusion.
 
+## Requirement coverage
+
+A flat list of numbers cannot express the part of a reproduction that isn't a
+number: *was the method implemented at all?* Papers claim four RMSE values, but
+the work behind them is "the search was implemented", "the filter runs as
+described", "the ablation was produced".
+
+So a plan may declare a **requirement tree**. Every leaf earns weight, is worth
+partial credit, and lands on one rung of a ladder:
+
+| kind | asks | how it is judged |
+| --- | --- | --- |
+| `development` | the code exists | attested by the reproducer, audited by the panel |
+| `execution` | it was actually run | attested by the reproducer, audited by the panel |
+| `result` | the numbers match | **graded arithmetically**, exactly like a claim |
+
+```yaml
+frozen_at: "2026-10-01T00:00:00Z"
+
+requirements:
+  - id: method
+    text: "GSA-KELM-KF implemented as the paper describes it"
+    children:
+      - { id: kelm,     text: "KELM kernel + hyperparameter search", kind: development, attested: true }
+      - { id: gsa,      text: "GSA gravitational search",           kind: development, attested: false }
+      - { id: kalman,   text: "Kalman leg and eta fusion",          kind: development, attested: false }
+      - { id: ablation, text: "ablation table produced",            kind: execution,   attested: false,
+          weight: 1.5 }
+      - id: kelm_numbers
+        text: "KELM baseline reproduces Table 1 / Table 2"
+        kind: result
+        weight: 2.0
+        claim_ids: [rmse_kelm@A1, rmse_kelm@A2, rmse_kelm@A4, rmse_kelm@A8]
+```
+
+The report then carries a **coverage score** next to the grade:
+
+```
+Overall grade: B (same magnitude / ordering) — A: 2, B: 7, C: 0, F: 0
+Requirement coverage: 46.2% (2/5 leaves earned)
+```
+
+And when the two disagree, it says so out loud instead of quietly picking one:
+
+```
+Gate warnings — the numeric grade and the tree disagree
+- numeric grade is B, but requirement 'kalman' (development) is unsatisfied
+```
+
+The grade is deliberately **not** rewritten by the tree. Silently folding
+"not implemented" into the grade would make the grade unauditable; surfacing the
+contradiction is the honest move.
+
+## Provenance gate
+
+"Produced by this reproduction" should be a rule, not a promise. Set `frozen_at`
+in the plan and give observations a `produced_at`; anything older than the freeze
+is refused, so a leftover JSON from last month cannot pass as this run's result.
+
+```json
+{ "key": "rmse", "group": "A1", "observed": 284.40, "produced_at": "2026-10-01T12:04:00Z" }
+```
+
+## Gaps that carry weight
+
+Gaps used to be prose. They can now name the claims they affect and how they were
+resolved, which lets a declared, documented hole stop being scored as a silent
+failure:
+
+```yaml
+gaps:
+  - id: no-kf-leg
+    text: "This run has no Kalman leg, so it is GSA-KELM, not GSA-KELM-KF."
+    affects: [rmse_gsa@A8]
+    resolved_by: "treat the A8 figure as an order-of-magnitude check only"
+```
+
+A gap only downgrades `F` to `C` when it both names the claim **and** states a
+resolution. A gap with no resolution changes nothing, and an observation that is
+missing outright stays missing.
+
 ## The reviewer panel
 
 Three roles, each returning a structured form that is combined into a 0-10 score:
@@ -161,6 +251,44 @@ Three roles, each returning a structured form that is combined into a 0-10 score
 Each reviewer needs a `Verdict` and a `Confidence`, and the run never aborts when one
 reviewer fails — the failure is recorded on that reviewer so the rest of the report
 still renders.
+
+Findings must name where they live and how bad they are, so a review is actionable
+rather than a mood:
+
+```
+| location                  | severity | issue                                        |
+| Requirement tree / kalman | high     | only the GSA-KELM leg is implemented ...     |
+| Reproducer notes / kelm.py| medium   | gamma/sigma came from grid search, not ...   |
+```
+
+The panel section always states its own validity, because a half-failed panel must
+never look like an agreeing one:
+
+```
+Panel validity: 3/3 reviewers returned a parseable score
+```
+
+If no reviewer returns a usable result, `check --llm` exits `2`.
+
+## Auditing the panel
+
+The requirement coverage is arithmetic and auditable. The panel is judgement, and
+until it is measured it is only vibes. `selfcheck` runs the panel repeatedly on
+identical input and reports score dispersion and decision agreement:
+
+```bash
+repro-verdict selfcheck --plan repro-plan.yaml --runs runs/ --repeat 5 --temperature 0.7
+```
+
+```
+reviewer          valid   mean    stdev   agreement   decision
+fidelity          5/5     5.5     0.00    5/5         Partially faithful
+evidence          5/5     4.12    0.31    4/5         Unsupported
+```
+
+This is a **stability** check, not a validity check: a panel can be consistently
+wrong. Validity needs human-labelled expectations, which repetition cannot
+substitute for.
 
 ## Python API
 

@@ -8,19 +8,39 @@ The package separates two questions that are usually mixed together:
 """
 
 from .compare import compare_claims, grade_pair, spearman
-from .models import Claim, Comparison, Grade, Observation, Tolerances, TrendResult, Verdict
+from .models import (
+    Claim,
+    Comparison,
+    Gap,
+    Grade,
+    Observation,
+    Requirement,
+    RequirementKind,
+    RequirementOutcome,
+    Tolerances,
+    TrendResult,
+    Verdict,
+)
+from .requirements import coverage, evaluate, walk_leaves
 
 __all__ = [
     "Claim",
     "Comparison",
+    "Gap",
     "Grade",
     "Observation",
+    "Requirement",
+    "RequirementKind",
+    "RequirementOutcome",
     "Tolerances",
     "TrendResult",
     "Verdict",
     "compare_claims",
+    "coverage",
+    "evaluate",
     "grade_pair",
     "spearman",
+    "walk_leaves",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

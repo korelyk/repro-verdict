@@ -13,23 +13,20 @@ tolerances:
   A: 0.001 # 0.1 percent relative error
   B: 0.05  # 5 percent relative error
 
+# Freeze the acceptance line. Any observation claiming to have been produced
+# before this instant is refused, so an old JSON cannot pass as this run.
+frozen_at: "2026-10-01T00:00:00Z"
+
 claims:
-  - key: rmse
-    group: A1
-    claimed: 284.83
-    unit: vehs/h
-  - key: rmse
-    group: A2
-    claimed: 193.58
-    unit: vehs/h
-  - key: rmse
-    group: A4
-    claimed: 221.36
-    unit: vehs/h
-  - key: rmse
-    group: A8
-    claimed: 162.84
-    unit: vehs/h
+  - { key: rmse_kelm, group: A1, claimed: 284.83, unit: vehs/h, note: "Table 1 KELM" }
+  - { key: rmse_kelm, group: A2, claimed: 193.58, unit: vehs/h, note: "Table 1 KELM" }
+  - { key: rmse_kelm, group: A4, claimed: 221.36, unit: vehs/h, note: "Table 1 KELM" }
+  - { key: rmse_kelm, group: A8, claimed: 162.84, unit: vehs/h, note: "Table 1 KELM" }
+  - { key: mape_kelm, group: A1, claimed: 11.76, unit: "%", note: "Table 2 KELM" }
+  - { key: mape_kelm, group: A2, claimed: 9.75, unit: "%", note: "Table 2 KELM" }
+  - { key: mape_kelm, group: A4, claimed: 11.37, unit: "%", note: "Table 2 KELM" }
+  - { key: mape_kelm, group: A8, claimed: 12.79, unit: "%", note: "Table 2 KELM" }
+  - { key: rmse_gsa, group: A8, claimed: 162.21, unit: vehs/h, note: "Table 1 GSA-KELM-KF; ours has no Kalman leg" }
 
 environment:
   gpu: "2x RTX 4090 24GB"
@@ -38,11 +35,62 @@ environment:
   libraries: "numpy 2.2.6, scipy 1.15.3, scikit-learn 1.7.2"
   data: "PeMS sections A1/A2/A4/A8, 5-minute flow, 2019-09"
 
+# The requirement tree carries what a flat claim list cannot: "was the method
+# actually implemented" and "was it actually run" are not numbers.
+requirements:
+  - id: method
+    text: "GSA-KELM-KF implemented as the paper describes it"
+    children:
+      - id: kelm
+        text: "KELM kernel matrix and hyperparameter search"
+        kind: development
+        attested: true
+        evidence: "复现实验/scan_kelm.py, runs/20261001/scan_kelm.log"
+      - id: gsa
+        text: "GSA gravitational search"
+        kind: development
+        attested: false
+        evidence: "constants and iteration count are not stated by the paper"
+      - id: kalman
+        text: "Kalman filter leg and eta fusion"
+        kind: development
+        attested: false
+        evidence: "not implemented in this run; only the GSA-KELM leg was run"
+      - id: kelm_numbers
+        text: "KELM baseline reproduces Table 1 / Table 2"
+        kind: result
+        weight: 2.0
+        claim_ids:
+          - rmse_kelm@A1
+          - rmse_kelm@A2
+          - rmse_kelm@A4
+          - rmse_kelm@A8
+          - mape_kelm@A1
+          - mape_kelm@A2
+          - mape_kelm@A4
+          - mape_kelm@A8
+      - id: ablation
+        text: "ablation table (KELM-KF / GSA-KELM) produced"
+        kind: execution
+        weight: 1.5
+        attested: false
+
 gaps:
-  - "GSA gravitational constant, iteration count and velocity bounds are not stated."
-  - "The Kalman filter weights (0.3 / 0.7) are given without derivation."
-  - "The Kalman filter is fed the previous true observation, which makes it close to a naive persistence rule."
+  - id: gsa-params
+    text: "GSA gravitational constant, iteration count and velocity bounds are not stated."
+    default: "fall back to the commonly used values and say so in the report"
+  - id: kf-weight
+    text: "The Kalman filter weights (0.3 / 0.7) are given without derivation."
+    default: "use the paper's 0.3 and report the sensitivity instead of failing the claim"
+  - id: no-kf-leg
+    text: "This run has no Kalman leg, so it is GSA-KELM, not GSA-KELM-KF."
+    affects: [rmse_gsa@A8]
+    resolved_by: "treat the A8 figure as an order-of-magnitude check only, not a hard failure"
 
 notes:
   - "KELM (gamma, sigma) chosen by grid search: (0.01, 2.0)."
   - "The paper's own ablation table shows GSA-KELM scoring worse than plain KELM."
+
+# Injected into the reviewer prompt only; never rendered into the report.
+judge_notes:
+  - "Weigh the fact that the paper's own ablation contradicts its GSA narrative."

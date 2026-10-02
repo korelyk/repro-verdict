@@ -1,6 +1,17 @@
 import pytest
 
-from repro_verdict import Claim, Grade, Observation, Tolerances, compare_claims, grade_pair, spearman
+from datetime import datetime, timezone
+
+from repro_verdict import (
+    Claim,
+    Gap,
+    Grade,
+    Observation,
+    Tolerances,
+    compare_claims,
+    grade_pair,
+    spearman,
+)
 
 
 def claim(key="rmse", claimed=100.0, group="A1"):
@@ -107,3 +118,66 @@ def test_trend_is_undefined_below_min_groups():
     verdict = compare_claims([claim(group="A1")], [obs(group="A1")])
     assert verdict.trends[0].consistent is None
     assert verdict.trends[0].n == 1
+
+
+def test_observation_produced_before_the_plan_freeze_is_refused():
+    frozen = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    earlier = Observation(
+        key="rmse", group="A1", observed=100.0, produced_at=datetime(2026, 9, 1, tzinfo=timezone.utc)
+    )
+    verdict = compare_claims([claim()], [earlier], frozen_at=frozen)
+
+    assert verdict.grade is Grade.F
+    assert verdict.stale == ["rmse@A1"]
+    assert "stale observation" in verdict.comparisons[0].reason
+
+
+def test_observation_produced_after_the_freeze_is_accepted():
+    frozen = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    later = Observation(
+        key="rmse", group="A1", observed=100.0, produced_at=datetime(2026, 10, 2, tzinfo=timezone.utc)
+    )
+    verdict = compare_claims([claim()], [later], frozen_at=frozen)
+    assert verdict.grade is Grade.A
+    assert verdict.stale == []
+
+
+def test_freeze_gate_ignores_observations_without_a_timestamp():
+    frozen = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    verdict = compare_claims([claim()], [obs()], frozen_at=frozen)
+    assert verdict.grade is Grade.A
+
+
+def test_resolved_gap_downgrades_a_failure_to_grade_c():
+    gaps = [
+        Gap(
+            id="gsa-params",
+            text="GSA constants are not stated",
+            affects=("rmse@A1",),
+            resolved_by="used the values from the reference implementation",
+        )
+    ]
+    verdict = compare_claims([claim()], [obs(observed=140.0)], gaps=gaps)
+
+    assert verdict.grade is Grade.C
+    assert "gsa-params" in verdict.comparisons[0].reason
+    assert verdict.gaps[0].id == "gsa-params"
+
+
+def test_gap_without_a_resolution_does_not_downgrade():
+    gaps = [Gap(id="x", text="unresolved", affects=("rmse@A1",))]
+    verdict = compare_claims([claim()], [obs(observed=140.0)], gaps=gaps)
+    assert verdict.grade is Grade.F
+
+
+def test_gap_does_not_affect_claims_it_does_not_name():
+    gaps = [Gap(id="x", text="", affects=("rmse@A8",), resolved_by="something")]
+    verdict = compare_claims([claim()], [obs(observed=140.0)], gaps=gaps)
+    assert verdict.grade is Grade.F
+
+
+def test_gap_never_upgrades_a_metric_that_already_failed_for_another_reason():
+    gaps = [Gap(id="x", text="", affects=("rmse@A1",), resolved_by="ok")]
+    verdict = compare_claims([claim()], [], gaps=gaps)
+    assert verdict.grade is Grade.F
+    assert verdict.missing == ["rmse@A1"]

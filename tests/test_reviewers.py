@@ -3,6 +3,7 @@ import json
 import pytest
 
 from repro_verdict.reviewers import REVIEWERS, get_specs, parse_review, score_review
+from repro_verdict.reviewers import Review, summarise
 
 
 def test_parse_review_reads_thought_and_fenced_json():
@@ -87,3 +88,40 @@ def test_system_prompt_embeds_persona_and_template():
     assert "meticulous methods reviewer" in prompt
     assert "THOUGHT:" in prompt
     assert "REVIEW JSON" in prompt
+
+
+def test_form_requests_located_findings_with_severity():
+    form = REVIEWERS["evidence"].form()
+    assert "Findings" in form
+    assert "location" in form
+    assert "severity" in form
+    assert "high" in form and "low" in form
+
+
+def test_summarise_counts_only_parseable_scores():
+    reviews = [
+        Review(reviewer="fidelity", title="F", score=5.5, decision="Partially faithful"),
+        Review(reviewer="evidence", title="E", score=6.0, decision="Weakly supported"),
+        Review(reviewer="reproducibility", title="R", error="boom"),
+    ]
+    summary = summarise(reviews)
+    assert summary.total == 3
+    assert summary.valid == 2
+    assert summary.mean_score == 5.75
+    assert summary.failed == ["reproducibility"]
+    assert summary.complete is False
+    assert "2/3" in summary.describe()
+
+
+def test_summarise_reports_a_complete_panel():
+    reviews = [Review(reviewer="fidelity", title="F", score=8.0)]
+    summary = summarise(reviews)
+    assert summary.complete is True
+    assert summary.failed == []
+
+
+def test_summarise_on_an_empty_panel_is_not_complete():
+    summary = summarise([])
+    assert summary.total == 0
+    assert summary.mean_score is None
+    assert summary.complete is False

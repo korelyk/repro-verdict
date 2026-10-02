@@ -7,7 +7,7 @@ from typing import Iterable, Sequence
 
 from .models import Comparison, Grade, Verdict
 from .plan import Plan
-from .reviewers import Review
+from .reviewers import Review, summarise
 
 
 def _fmt(value: float | None, digits: int = 6) -> str:
@@ -71,11 +71,48 @@ def trend_table(verdict: Verdict) -> str:
     return "\n".join(rows)
 
 
+def requirement_table(verdict: Verdict) -> str:
+    """Render the requirement tree with the weight each leaf carried."""
+
+    if not verdict.requirement_outcomes:
+        return "_no requirement tree declared (only numeric claims were checked)_"
+    rows = [
+        "| requirement | kind | effective weight | met | evidence / reason |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for outcome in verdict.requirement_outcomes:
+        requirement = outcome.requirement
+        met = "-" if outcome.passed is None else ("yes" if outcome.passed else "**no**")
+        detail = requirement.evidence or outcome.reason
+        rows.append(
+            f"| {requirement.id} | {requirement.kind.value} | {outcome.weight:g} | {met} | {detail} |"
+        )
+    return "\n".join(rows)
+
+
+def gap_table(verdict: Verdict) -> str:
+    if not verdict.gaps:
+        return "_none declared_"
+    rows = ["| gap | what is missing | affects | resolution used |", "| --- | --- | --- | --- |"]
+    for gap in verdict.gaps:
+        affects = ", ".join(gap.affects) or "-"
+        resolution = gap.resolved_by or gap.default or "-"
+        rows.append(f"| {gap.id} | {gap.text} | {affects} | {resolution} |")
+    return "\n".join(rows)
+
+
 def review_sections(reviews: Sequence[Review]) -> str:
     if not reviews:
         return "_review panel not run_"
 
-    chunks: list[str] = []
+    panel = summarise(reviews)
+    chunks: list[str] = [f"Panel validity: **{panel.describe()}**"]
+    if panel.mean_score is not None:
+        chunks.append(f"Panel mean score: **{panel.mean_score:g}/10**")
+    if panel.failed:
+        chunks.append(f"Failed or unparseable: `{', '.join(panel.failed)}`")
+    chunks.append("")
+
     for review in reviews:
         heading = f"### {review.title}"
         if review.error:
@@ -92,10 +129,19 @@ def review_sections(reviews: Sequence[Review]) -> str:
         if review.thought:
             chunks.append(f"> {review.thought.strip()}\n")
 
-        weaknesses = review.payload.get("Weaknesses")
-        if isinstance(weaknesses, list) and weaknesses:
-            chunks.append("**Weaknesses raised**\n")
-            chunks.extend(f"- {item}" for item in weaknesses)
+        findings = review.payload.get("Findings")
+        if isinstance(findings, list) and findings:
+            chunks.append("**Findings**\n")
+            chunks.append("| location | severity | issue |")
+            chunks.append("| --- | --- | --- |")
+            for item in findings:
+                if isinstance(item, dict):
+                    location = item.get("location", "-")
+                    severity = item.get("severity", "-")
+                    issue = str(item.get("issue", "")).replace("|", "\\|")
+                    chunks.append(f"| {location} | {severity} | {issue} |")
+                else:
+                    chunks.append(f"| - | - | {item} |")
             chunks.append("")
 
         questions = review.payload.get("Questions")
@@ -105,7 +151,11 @@ def review_sections(reviews: Sequence[Review]) -> str:
             chunks.append("")
 
         if review.payload:
-            body = "\n".join(f"{key}: {value}" for key, value in review.payload.items() if key not in {"Weaknesses", "Questions"})
+            body = "\n".join(
+                f"{key}: {value}"
+                for key, value in review.payload.items()
+                if key not in {"Findings", "Weaknesses", "Questions"}
+            )
             chunks.append("<details><summary>full review JSON</summary>\n")
             chunks.append("```\n" + body + "\n```\n")
             chunks.append("</details>")
@@ -138,6 +188,11 @@ def render_report(
         lines.append(f"`{paper}`")
         lines.append("")
     lines.append(f"**Overall grade: {verdict.grade.value}** ({verdict.grade.label}) — {summary}")
+    if verdict.score is not None:
+        lines.append(
+            f"Requirement coverage: **{verdict.score * 100:.1f}%** "
+            f"({len(verdict.covered)}/{len(verdict.requirement_outcomes)} leaves earned)"
+        )
     if target:
         try:
             met = "met" if verdict.grade.rank >= Grade(target.upper()).rank else "**not met**"
@@ -157,36 +212,48 @@ def render_report(
     lines.append(trend_table(verdict))
     lines.append("")
 
-    lines.append("## 3. Gaps")
+    lines.append("## 3. Requirement coverage")
+    lines.append("")
+    lines.append(requirement_table(verdict))
+    lines.append("")
+    if verdict.gate_warnings:
+        lines.append("**Gate warnings — the numeric grade and the tree disagree**")
+        lines.append("")
+        lines.extend(f"- {warning}" for warning in verdict.gate_warnings)
+        lines.append("")
+
+    lines.append("## 4. Gaps")
+    lines.append("")
+    lines.append(gap_table(verdict))
     lines.append("")
     if verdict.missing:
         lines.append("**Claims with no observation**")
         lines.extend(f"- `{item}`" for item in verdict.missing)
         lines.append("")
+    if verdict.stale:
+        lines.append("**Refused as stale (produced before the plan was frozen)**")
+        lines.extend(f"- `{item}`" for item in verdict.stale)
+        lines.append("")
     if verdict.unclaimed:
         lines.append("**Observations with no claim in the plan**")
         lines.extend(f"- `{item}`" for item in verdict.unclaimed)
         lines.append("")
-    if plan and plan.gaps:
-        lines.append("**Declared gaps from the plan**")
-        lines.extend(f"- {gap}" for gap in plan.gaps)
-        lines.append("")
-    if not verdict.missing and not verdict.unclaimed and not (plan and plan.gaps):
+    if not verdict.missing and not verdict.unclaimed and not verdict.stale and not verdict.gaps:
         lines.append("_none recorded_")
         lines.append("")
 
-    lines.append("## 4. Reviewer panel")
+    lines.append("## 5. Reviewer panel")
     lines.append("")
     lines.append(review_sections(list(reviews or [])))
     lines.append("")
 
-    lines.append("## 5. Environment card")
+    lines.append("## 6. Environment card")
     lines.append("")
     lines.append(environment_card(plan))
     lines.append("")
 
     if plan and plan.notes:
-        lines.append("## 6. Notes")
+        lines.append("## 7. Notes")
         lines.append("")
         lines.extend(f"- {note}" for note in plan.notes)
         lines.append("")
@@ -208,6 +275,8 @@ def build_review_context(verdict: Verdict, plan: Plan | None = None) -> str:
 
     lines.append(f"Deterministic overall grade: {verdict.grade.value} ({verdict.grade.label})")
     lines.append(f"Tolerances: A <= {verdict.tolerances.a:g} relative, B <= {verdict.tolerances.b:g} relative")
+    if verdict.score is not None:
+        lines.append(f"Requirement coverage: {verdict.score * 100:.1f}%")
     lines.append("")
     lines.append("Metric comparison:")
     lines.append(metric_table(verdict.comparisons))
@@ -215,15 +284,20 @@ def build_review_context(verdict: Verdict, plan: Plan | None = None) -> str:
     lines.append("Ordering consistency across groups:")
     lines.append(trend_table(verdict))
     lines.append("")
+    lines.append("Requirement tree:")
+    lines.append(requirement_table(verdict))
+    lines.append("")
 
     if verdict.missing:
         lines.append("Claims with no observation: " + ", ".join(verdict.missing))
+    if verdict.stale:
+        lines.append("Refused as stale: " + ", ".join(verdict.stale))
     if verdict.unclaimed:
         lines.append("Observations with no claim: " + ", ".join(verdict.unclaimed))
-    if plan and plan.gaps:
+    if verdict.gaps:
         lines.append("")
         lines.append("Gaps declared by the reproducer:")
-        lines.extend(f"- {gap}" for gap in plan.gaps)
+        lines.append(gap_table(verdict))
 
     lines.append("")
     lines.append("Environment:")
@@ -233,5 +307,10 @@ def build_review_context(verdict: Verdict, plan: Plan | None = None) -> str:
         lines.append("")
         lines.append("Reproducer notes:")
         lines.extend(f"- {note}" for note in plan.notes)
+
+    if plan and plan.judge_notes:
+        lines.append("")
+        lines.append("Judge-only notes (not shown to the reproducer):")
+        lines.extend(f"- {note}" for note in plan.judge_notes)
 
     return "\n".join(lines)

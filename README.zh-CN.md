@@ -40,6 +40,8 @@ repro-verdict 把这种感觉拆成两件可核对的事：
 容差默认 `A <= 0.1%`、`B <= 5%`，写在计划文件里——
 也就是说**验收线在跑之前就写死了**，不是看到结果再讨价还价。
 
+档位只回答「数字对上没有」。它还配了一个**覆盖率**数字，见下文「要求树」。
+
 ## 安装
 
 ```bash
@@ -116,6 +118,58 @@ Spearman 秩相关：
 
 「逐项都对得上」叠加「rho 为负」，正是「数字看着没问题」掩盖结论已崩的典型情形。
 
+## 要求树（覆盖率）
+
+一串数字表达不了复现里**不是数字**的那部分：*方法到底实现了没有？*
+论文声称四个 RMSE，但背后的工作是「搜索实现了」「滤波器按描述跑起来了」「消融跑出来了」。
+
+所以计划里可以声明一棵**要求树**。每个叶子带权重、有部分学分，并落在阶梯的一级上：
+
+| kind | 问的是 | 怎么判 |
+| --- | --- | --- |
+| `development` | 代码存在吗 | 复现者 attest，评审团审计 |
+| `execution` | 真跑了吗 | 复现者 attest，评审团审计 |
+| `result` | 数字对得上吗 | **纯算术**，与普通 claim 完全一样 |
+
+报告里会同时给出档位与覆盖率：
+
+```
+Overall grade: B (same magnitude / ordering) — A: 2, B: 7, C: 0, F: 0
+Requirement coverage: 46.2% (2/5 leaves earned)
+```
+
+两者矛盾时，报告会**明说**，而不是偷偷二选一：
+
+```
+Gate warnings — the numeric grade and the tree disagree
+- numeric grade is B, but requirement 'kalman' (development) is unsatisfied
+```
+
+档位**不会**被要求树改写。把「没实现」悄悄折进档位，会让档位失去可审计性；
+把矛盾摆出来才是诚实的做法。
+
+## 证据溯源门禁
+
+「这个数是本次复现产出的」应该是规则，不是承诺。在计划里写 `frozen_at`，
+给观测值写 `produced_at`，**早于冻结时刻的观测一律拒收**——
+上个月遗留的 JSON 不可能冒充这次的运行结果。
+
+## 会降档的结构化缺口
+
+缺口以前只是散文。现在它可以声明影响哪些 claim、以及用了什么兜底，
+从而让一个**已声明的、有交代的**缺口不再被当成静默失败：
+
+```yaml
+gaps:
+  - id: no-kf-leg
+    text: "本次没有 Kalman 那一路，所以是 GSA-KELM 而不是 GSA-KELM-KF。"
+    affects: [rmse_gsa@A8]
+    resolved_by: "A8 只作量级参考，不判硬失败"
+```
+
+只有当缺口**既点名了 claim、又给出了兜底**时，才会把 `F` 降为 `C`。
+没有兜底的缺口不改变任何判定；完全没有观测值的仍然算缺失。
+
 ## 评审团
 
 三个角色，各自返回结构化表单，再加权成 0–10 分：
@@ -128,6 +182,34 @@ Spearman 秩相关：
 
 每个评审都要给出 `Verdict` 和 `Confidence`；某个评审失败不会中断整轮，
 失败会记在该评审名下，报告其余部分照常渲染。
+
+每条 finding 必须**指明位置**并给出严重度，让评审可执行而不是一种情绪：
+
+```
+| location                  | severity | issue                                        |
+| Requirement tree / kalman | high     | 只实现了 GSA-KELM 那一路 ...                 |
+| Reproducer notes / kelm.py| medium   | gamma/sigma 来自网格搜索而非论文 ...          |
+```
+
+评审节始终自报有效率——**半个失败的评审团绝不能看起来像意见一致的评审团**：
+
+```
+Panel validity: 3/3 reviewers returned a parseable score
+```
+
+如果一个有效结果都没有，`check --llm` 退出码为 `2`。
+
+## 审计评审团本身
+
+覆盖率是算术，可审计；评审团是判断，**不度量它就只是感觉**。
+`selfcheck` 在完全相同的输入上重复跑评审团，报告分数离散度与判定一致率：
+
+```bash
+repro-verdict selfcheck --plan repro-plan.yaml --runs runs/ --repeat 5 --temperature 0.7
+```
+
+这是**稳定性**检查，不是**有效性**检查：一个评审团可以稳定地错。
+有效性需要人工标注的期望值，重复运行替代不了。
 
 ## Python API
 

@@ -7,9 +7,21 @@ That is deliberate, because the acceptance decision has to be auditable.
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from typing import Iterable, Sequence
 
-from .models import Claim, Comparison, Grade, Observation, Tolerances, TrendResult, Verdict
+from .models import (
+    Claim,
+    Comparison,
+    Gap,
+    Grade,
+    Observation,
+    Requirement,
+    Tolerances,
+    TrendResult,
+    Verdict,
+)
+from .requirements import coverage, evaluate, gate_warnings
 
 
 def average_ranks(values: Sequence[float]) -> list[float]:
@@ -78,9 +90,17 @@ def compare_claims(
     *,
     trend_min_groups: int = 3,
     trend_min_rho: float = 0.8,
+    requirements: Sequence[Requirement] = (),
+    gaps: Sequence[Gap] = (),
+    frozen_at: datetime | None = None,
     meta: dict | None = None,
 ) -> Verdict:
-    """Join claims with observations by ``id`` and produce an aggregate verdict."""
+    """Join claims with observations by ``id`` and produce an aggregate verdict.
+
+    ``frozen_at`` activates the provenance gate: an observation that claims to
+    have been produced before the plan was frozen is refused, because it cannot
+    have been produced by this reproduction.
+    """
 
     tol = tolerances or Tolerances()
     claims = list(claims)
@@ -89,6 +109,7 @@ def compare_claims(
 
     comparisons: list[Comparison] = []
     missing: list[str] = []
+    stale: list[str] = []
 
     for claim in claims:
         obs = index.get(claim.id)
@@ -98,25 +119,70 @@ def compare_claims(
             )
             missing.append(claim.id)
             continue
+
+        if frozen_at is not None and obs.produced_at is not None and obs.produced_at < frozen_at:
+            comparisons.append(
+                Comparison(
+                    claim,
+                    obs.observed,
+                    None,
+                    None,
+                    Grade.F,
+                    "stale observation: produced "
+                    f"{obs.produced_at.isoformat()} before the plan was frozen at {frozen_at.isoformat()}",
+                )
+            )
+            stale.append(claim.id)
+            continue
+
         grade, abs_err, rel_err, reason = grade_pair(claim.claimed, obs.observed, tol)
         if grade is Grade.F and obs.observed is None:
             missing.append(claim.id)
+
+        if grade is Grade.F:
+            resolver = _resolving_gap(claim.id, gaps)
+            if resolver is not None:
+                grade = Grade.C
+                reason = (
+                    f"out of tolerance, but gap '{resolver.id}' declares this claim not "
+                    f"hard-failable: {resolver.resolved_by}"
+                )
+
         comparisons.append(Comparison(claim, obs.observed, abs_err, rel_err, grade, reason))
 
     claimed_ids = {claim.id for claim in claims}
     unclaimed = sorted(obs.id for obs in observations if obs.id not in claimed_ids)
 
     trends = _trends(comparisons, trend_min_groups, trend_min_rho)
+    overall = Grade.worst(c.grade for c in comparisons)
+
+    outcomes = evaluate(list(requirements), comparisons) if requirements else []
+    warnings = gate_warnings(outcomes, overall) if outcomes else []
 
     return Verdict(
-        grade=Grade.worst(c.grade for c in comparisons),
+        grade=overall,
         comparisons=comparisons,
         trends=trends,
         missing=missing,
         unclaimed=unclaimed,
         tolerances=tol,
+        requirements=list(requirements),
+        requirement_outcomes=outcomes,
+        gaps=list(gaps),
+        gate_warnings=warnings,
+        stale=stale,
+        score=coverage(outcomes) if outcomes else None,
         meta=dict(meta or {}),
     )
+
+
+def _resolving_gap(claim_id: str, gaps: Sequence[Gap]) -> Gap | None:
+    """Return the first gap that declares ``claim_id`` exempt from hard failure."""
+
+    for gap in gaps:
+        if gap.resolved_by and claim_id in gap.affects:
+            return gap
+    return None
 
 
 def _trends(
