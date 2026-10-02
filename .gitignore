@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.idea/
+.vscode/
+
+# local outputs
+reports/
+*.log
+
+# never commit credentials or private run data
+.env
+*.key
+runs.local.json

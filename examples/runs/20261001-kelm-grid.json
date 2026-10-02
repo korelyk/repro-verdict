@@ -1,0 +1,10 @@
+{
+  "run_id": "20261001-kelm-grid",
+  "started_at": "2026-10-01T12:00:00Z",
+  "metrics": [
+    { "key": "rmse", "group": "A1", "observed": 284.40, "unit": "vehs/h", "source": "kelm_baseline.json" },
+    { "key": "rmse", "group": "A2", "observed": 193.59, "unit": "vehs/h", "source": "kelm_baseline.json" },
+    { "key": "rmse", "group": "A4", "observed": 221.00, "unit": "vehs/h", "source": "kelm_baseline.json" },
+    { "key": "rmse", "group": "A8", "observed": 162.64, "unit": "vehs/h", "source": "kelm_baseline.json" }
+  ]
+}
